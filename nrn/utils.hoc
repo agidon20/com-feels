@@ -1,0 +1,64 @@
+
+    objref NULL //so there is a way to kill any object by setting obj = NULL
+    BASE_RANDOM_SEED = 121 //although we use sudo-random numbers, it is only to create a pattern of fixed activity
+
+    objref global_random_obj //so we have only one random object and seeds are controlled
+    obfunc get_random_obj(){
+        if(global_random_obj == NULL){
+            global_random_obj = new Random(BASE_RANDOM_SEED)
+            print "Allocating new random object"
+        }
+        return global_random_obj
+    }
+
+    func rin(){local x localobj imp
+        x = $1
+        imp = new Impedance(x)
+        imp.loc(x)
+        imp.compute(0)
+        return imp.input(x)
+    }    
+
+    obfunc append_vclamp(){localobj dc
+        dc = new SEClamp(0.5)
+        dc.dur1 = tstop
+        dc.rs = 1e-2
+        $o1.append(dc)
+        return dc
+    }
+
+    obfunc append_syn(){localobj s
+        s = new mySyn(0.5)
+        s.gmax = 0  //uS
+        s.tau_r = 2
+        s.tau_d = 10
+        s.e = 0	
+        $o1.append(s)
+        return s
+    }
+    
+    proc append_netcon(){local threshold localobj nc, target
+        target = $o2
+        threshold = 0
+        //the NetCon.Weight does not affect anything here.
+        nc = new NetCon(&v(0.5),target,threshold,2,0)
+        $o1.append(nc)
+    }
+    
+
+    obfunc append_tplay(){local i,Hz,delay,terminate_time localobj tplay,rnd
+        Hz = $1
+        delay = $2
+        terminate_time = $3
+        rnd = get_random_obj()
+        //assign four times the nuber of extepcted spike per second to be safe
+        tplay = new Vector(Hz * 0.2) 
+        rnd.negexp(1/Hz * 1000)
+        tplay.setrand(rnd)
+        tplay.integral().add(delay)
+        tplay.printf
+        i = tplay.indwhere(">", terminate_time)
+        if(i>0) tplay.remove(i, tplay.size()-1)
+        $o4.append(tplay)
+        return tplay
+    }

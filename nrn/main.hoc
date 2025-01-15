@@ -1,0 +1,421 @@
+/*
+* Does neural computation feel like something?
+* The model is based on network discussed in  Gidon et al., 2025
+
+	The models consists of 5 cortical neurons (A,B,C,D,E) with a feedforward LGN input.
+	The LGN is activated by visual input (green light) and acts as a background constraint for 
+    Nodes A and B, ensuring their activation during stimulation.
+    connectivity is like a ring, [a --> c,d,e],[b --> d,e,a],[c --> e,a,b], [d --> a,b,c], [e --> b,c,d]
+* 
+* written by 
+* Albert Gidon
+*/
+
+    if(unix_mac_pc() == 3) nrn_load_dll("./_mod/nrnmech.dll")
+	load_file("nrngui.hoc")
+	load_file("./TScalebar.hoc")
+    load_file("./utils.hoc")
+    load_file("./biophys.hoc")
+
+/*
+*******************************************************
+simulation parameters
+*******************************************************
+*/
+    steps_per_ms = 100
+	dt = 1/steps_per_ms
+	tstop = 400
+
+    N_LGN_NODES = 2 
+    N_CORTICAL_NEURONS = 5  
+
+    OBSERVED_CORTICAL_CELL = 0 //for plotting, do one cell at a time, it is more organized this way
+
+    OBSERVED_LGN_NODE = 0 //for plotting, do one lgn node (the synapse) at a time, it is more organized this way
+    GSYN_CORTEX = 5e-3 // the strength of connection between the cortical neurons
+    GSYN_LGN = 5e-3 // the strenght of connection between the LGN and the cortical neurons
+    LGN_SYN_RATE = 50 // rate of input from LGN.
+    CORTEX_STP_fD = 0.5 // short term plasticity of the cortical neuron connection.
+    CORTEX_STP_TAU = 1000 // short term plasticity of the cortical neuron connection.
+
+    ROW0 = 0
+    ROW1 = 0
+    ROW2 = 0
+
+    LGN_OFF = 0 //value for switching ON or OFF for the LGN nodes
+    LGN_ON = 1  //value for switching ON or OFF for the LGN nodes
+    BLUE = 0 // hue for blue visual input only node one is "on"
+    RED = 1 // hue for red visual input only node one is "on"
+    GREEN = 2 // hue for green visual input both nodes "on"
+    NOTHING = 3  // hue for no visual input both nodes "off"
+    BLOCK = 1 // block a synapse (syn.block = BLOCK)
+    UNBLOCK = 0 // unblock a synapse (syn.block = UNBLOCK)
+
+    TAG_CORTICAL_SYN = 1
+    TAG_LGN_SYN = 2
+
+/*
+*******************************************************
+    Create the cells and synapses
+*******************************************************
+*/      
+	create cortical_neuron[N_CORTICAL_NEURONS]
+    objref apc[N_CORTICAL_NEURONS]
+    for i=0,N_CORTICAL_NEURONS-1 cortical_neuron[i] biophys() 
+    for i=0,N_CORTICAL_NEURONS-1 cortical_neuron[i] apc[i] = new APCount(.5)
+    finitialize()
+    cortical_neuron[0] print "Rin=", rin(0.5) //all neurons are identical
+
+/*
+*******************************************************
+   load connectivity data for LGN
+   The connections of the recurrent network is not
+   all to all. It is specified as in Oizumi et al., 2014
+   Figure 17C. This network has a Φ of 10.75 but under
+   different circumstances. 
+*******************************************************
+*/      
+
+	objref f
+	objref lgn_connectivity_mat
+	lgn_connectivity_mat = new Matrix()
+	f = new File("./dat/lgn_connectivity.dat")
+	f.ropen()
+	lgn_connectivity_mat.scanf(f, N_CORTICAL_NEURONS, N_LGN_NODES)
+	f.close()
+
+/*
+*******************************************************
+   load connectivity data for cortex
+   Not all to all but specified as in Oizumi et al., 2014
+   Figure 17C to achive majority network, when three nodes are active
+   the entire network will fire. 
+   In Oizumi et al., 2014 this network has a Φ of 10.75 
+   but under different circumstances.
+*******************************************************
+*/      
+
+   	objref cortex_connectivity_mat
+	cortex_connectivity_mat = new Matrix()
+	f = new File("./dat/cortex_connectivity.dat")
+	f.ropen()
+	cortex_connectivity_mat.scanf(f, N_CORTICAL_NEURONS, N_CORTICAL_NEURONS)
+	if(ROW0) cortex_connectivity_mat.setrow(ROW0,0)
+    if(ROW1) cortex_connectivity_mat.setrow(ROW1,0)    
+    if(ROW2) cortex_connectivity_mat.setrow(ROW2,0)    
+
+    f.close()
+	
+/*
+*******************************************************
+    _globals_ is a unique list that consists of everything 
+    which does not requires access or changes later.
+*******************************************************
+*/
+    objref _globals_
+    _globals_ = new List()
+
+/*
+*******************************************************
+    connect the cortical network 
+*******************************************************
+*/
+
+	objref observed_cortical_cell_syn_list //list for all the synapses for the observed cortical cell
+    objref allsynapses
+    objref syn
+
+    observed_cortical_cell_syn_list = new List()
+    allsynapses = new List()
+	// connect every ith presynaptic neuron with the synapse on the jth postsynaptic neuron
+    // essentially all to all, but the weight will be set below according to the cortex_connectivity_mat
+	for i=0,N_CORTICAL_NEURONS-1  {
+        for j=0,N_CORTICAL_NEURONS-1 {
+            //append i-->j synapse with the proper netcon (not that the synaptic weight is only set by syn.gmax)
+            cortical_neuron[j] syn = append_syn(allsynapses) //postsynaptic j
+            cortical_neuron[i] append_netcon(_globals_,syn) //presynaptic i
+            gmax = cortex_connectivity_mat.getval(i,j)
+            print "pre CORTEX i(",i,")-->post CORTEX j(",j,") with gmax=",gmax
+            syn.gmax = gmax*GSYN_CORTEX
+            syn.fD = CORTEX_STP_fD
+            syn.tau_stp = CORTEX_STP_TAU
+            syn.tag = TAG_CORTICAL_SYN
+            if(j == OBSERVED_CORTICAL_CELL) observed_cortical_cell_syn_list.append(syn)
+        }
+        print ""//just new line
+    }
+
+    proc block_cortical_synapses(){local block,i,j localobj syn
+        for j=0,allsynapses.count-1{
+            syn = allsynapses.o(j)
+            if(syn.tag = TAG_CORTICAL_SYN) syn.block = $1
+        }
+    }
+
+/*
+*******************************************************
+    cerate the the LGN input
+*******************************************************
+*/
+
+	//input layer create input to all neurons and use matrix to set the wieghts
+	objref lgn_syn_list[N_LGN_NODES] //one input for each cell.
+	objref tp
+    for i=0,N_LGN_NODES-1 {
+        lgn_syn_list[i] = new List()
+        tp = append_tplay(LGN_SYN_RATE,100,400, _globals_) //one for each LGN node
+        for j=0,N_CORTICAL_NEURONS-1 {
+            cortical_neuron[j] syn = append_syn(lgn_syn_list[i])  //postsynaptic j
+            syn.gmax = GSYN_LGN *  lgn_connectivity_mat.getval(j,i)
+            print "pre LGN i(",i,")-->post CORTEX j(",j,") with gmax=",syn.gmax
+            syn.play( tp )
+            syn.tag = TAG_LGN_SYN
+        }
+        print "" //new line
+    }
+
+    //switch LGN node on or off
+    proc turn_lgn_node(){local lgn_node,c, node_state
+        lgn_node = $1
+        node_state = $2
+        c = lgn_syn_list[lgn_node].count
+        for i=0, c-1 lgn_syn_list[lgn_node].o(i).block = (node_state == LGN_OFF)
+    }    
+	
+    proc visual_input(){local hue
+        hue = $1
+        //initialize to no input first
+        if(hue == GREEN){
+            turn_lgn_node(0,LGN_ON) // one connection to cell A
+            turn_lgn_node(1,LGN_ON) // one connections to cell B
+        }
+        if(hue == BLUE) {
+            turn_lgn_node(0,LGN_ON)
+            turn_lgn_node(1,LGN_OFF)               
+        }
+        if(hue == RED){
+            turn_lgn_node(0,LGN_OFF)
+            turn_lgn_node(1,LGN_ON)
+        }
+        if(hue == NOTHING){
+            turn_lgn_node(0,LGN_OFF)
+            turn_lgn_node(1,LGN_OFF)
+        }        
+    }
+
+  
+/*
+*******************************************************
+ Network is ready now. Lets start to run the simulation 
+    and record the results. all recordings are done 
+    in the observed cell.
+    So first make sure that recordings is done properly.
+    1. record the synaptic current for the observed cortical cell
+    2. record the soma of all cortical cells (later used for replay)
+    3. record the synaptic current from all LGN nodes to the observed cortical cell.
+*******************************************************
+*/
+    
+	objref vclamp_recordings[2] //for cell A and B
+	objref vsoma_recordings[N_CORTICAL_NEURONS] //need to record all the cortical neurons for the replay
+    objref lgn_isyn_recordings[N_LGN_NODES] //all the LGN synaptic inputs to the LGN connected neurons 
+    objref cortex_isyn_recordings[N_CORTICAL_NEURONS] //all the cortical synaptic inputs to the observed neuron
+  
+
+    proc init_recordings(){local i,j
+        //record synaptic current on the OBSERVED_CORTICAL_CELL
+        for i=0,N_CORTICAL_NEURONS-1 cortex_isyn_recordings[i] = new Vector()
+        for i=0,N_CORTICAL_NEURONS-1 cortex_isyn_recordings[i].record(&observed_cortical_cell_syn_list.o(i).i,dt)
+        
+        //record soma for all cortical neurons because replay is for all cortical cells.
+        for i=0,N_CORTICAL_NEURONS-1 vsoma_recordings[i] = new Vector()
+        for i=0,N_CORTICAL_NEURONS-1 vsoma_recordings[i].record(&cortical_neuron[i].v(0.5),dt)
+
+        //record the synaptic current from the LGN onto cortical cell 0
+        for i=0,N_LGN_NODES-1 lgn_isyn_recordings[i] = new Vector()	
+        // LGN0-->synapse-->CellA
+        // LGN1-->synapse-->CellB        
+        for j=0,N_LGN_NODES-1 lgn_isyn_recordings[j].record(&lgn_syn_list[j].o(j).i)
+
+    }
+
+    objref vsoma_replay[N_CORTICAL_NEURONS] //replay all the neurons in the cortex
+	objref vclamp_list
+    proc init_voltage_clamp_replay(){local i localobj vc
+        vclamp_list = new List()
+        
+        for i=0,N_CORTICAL_NEURONS-1 {
+            cortical_neuron[i] vc = append_vclamp(vclamp_list)
+            vsoma_replay[i] = vsoma_recordings[i].c //from previous step
+            vsoma_replay[i].play(&vc.amp1,dt) // replay recorded activity to the vclamp_list
+        }
+       // record the current generated by the vclamp_list during the replay for cells A and B
+        vclamp_recordings[0] = new Vector()
+        vc = vclamp_list.o(0)
+        vclamp_recordings[0].record(&vc.i,dt) 
+
+        vclamp_recordings[1] = new Vector()
+        vc = vclamp_list.o(1)        
+        vclamp_recordings[1].record(&vc.i,dt) 
+    }
+
+    proc experiment_record(){local hue
+        //set here the color: 
+        visual_input(hue = $1)
+        run()
+     }
+
+    proc experiment_replay(){local hue 
+        //start the voltage clamp
+        init_voltage_clamp_replay()
+        visual_input(hue = $1)
+        run()
+        vclamp_list = NULL //remove the replays
+    }
+   
+
+    obfunc _plot_(){localobj graph, vec
+        if(numarg() > 6){
+            graph = $o7
+        }else{
+		    graph = new Graph()
+        }
+        $o1.append(graph)
+        graph.color($6)
+        graph.fixed(1)
+		graph.label(0,$o3.x[400] - 20,$s2)
+        vec = $o3.c.remove(0,6000) //initial values...
+        vec.line(graph,dt,$6,1)
+		graph.size(0, tstop, -80,550)
+		append_scale_bar(graph,$4,$5)
+        return graph
+	}
+
+    objref graph_traces
+    strdef description
+
+
+    proc network_behavior(){local HUE, LINE_COLOR localobj graph_traces
+        HUE = $1
+        LINE_COLOR = $2
+        experiment_record(HUE) //record the activity with LGN input
+        graph_traces = new Graph()
+        graph_traces.vfixed(1)
+		graph_traces.label(0.1,0.9,"Netowrk behavior")
+        description = "V: light - during recording"
+        for i=0, N_CORTICAL_NEURONS-1 _plot_(_globals_,"",vsoma_recordings[i].c.add(i*120),scalebarx,scalebary,LINE_COLOR,graph_traces)
+    }
+
+
+    proc run_experiment(){local hue,i localobj vec_isyn_sum
+
+        CELL_A = CELL_BLUE = LGN_NODE0 = 0
+        CELL_B = CELL_RED = LGN_NODE1 = 1
+        COLOR_BLACK = 1
+        COLOR_RED=2
+        COLOR_BLUE=3
+        COLOR_GREEN=4
+        COLOR_ORANGE = 5
+        COLOR_BROWN=6
+        scalebarx = 50
+        scalebary = 100
+    //show all neurons in one graph for each of the three experiments
+    // experiment 1: red light
+
+        network_behavior(BLUE,COLOR_BLUE)
+        network_behavior(RED,COLOR_RED)
+
+    // //Stuff for Figure 1A
+        experiment_record(GREEN) //record the activity with LGN input
+        graph_traces = new Graph()
+        graph_traces.vfixed(1)
+		graph_traces.label(0.1,0.9,"Figure 1A")
+        description = "V: green light - during recording"
+        for i=0, N_CORTICAL_NEURONS-1 _plot_(_globals_,description,vsoma_recordings[i].c.add(i*120),scalebarx,scalebary,COLOR_GREEN,graph_traces)
+
+    //Figure 2A2
+        description = "V: green light - during recording (cell A)"
+        graph_traces = _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(400),scalebarx,scalebary,COLOR_GREEN)
+        
+        {graph_traces.vfixed(1) graph_traces.label(0.1,0.9,"Figure 2A")}
+        
+        description = "i: LGN0 synaptic input during green light(cell A)"
+        _plot_(_globals_,description,lgn_isyn_recordings[LGN_NODE0].c.mul(100).add(100),scalebarx,scalebary,COLOR_BLUE,graph_traces)
+        
+        description = "i: LGN1 synaptic input during green light(cell B)"
+        _plot_(_globals_,description,lgn_isyn_recordings[LGN_NODE1].c.mul(100).add(200),scalebarx,scalebary,COLOR_RED,graph_traces)
+        
+        experiment_replay(NOTHING)
+        
+        description = "V: replay green during no light  (cell A; incongruent)"
+        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(1050),scalebarx,scalebary,COLOR_BLACK,graph_traces)
+        
+        description = "V: replay green during no light  (cell B; incongruent)"
+        _plot_(_globals_,description,vsoma_recordings[CELL_B].c.add(900),scalebarx,scalebary,COLOR_BLACK,graph_traces)        
+        
+        description = "volage clamp i: replay green during no light (cell A; incongruent)"
+        _plot_(_globals_,description,vclamp_recordings[0].c.mul(100).add(520),scalebarx,scalebary,COLOR_ORANGE,graph_traces)
+        
+        description = "volage clamp i: replay green during no light (cell B; incongruent)"
+        _plot_(_globals_,description,vclamp_recordings[1].c.mul(100).add(650),scalebarx,scalebary,COLOR_BROWN,graph_traces)
+
+    //Figure 3A2
+   
+        experiment_record(BLUE) //record the activity with LGN input
+        dy = 0
+        description = "V: blue light during recording (cell B)"
+        graph_traces = _plot_(_globals_,description,vsoma_recordings[CELL_B],scalebarx,scalebary,COLOR_BLUE)
+        
+        {graph_traces.vfixed(1) graph_traces.label(0.1,0.9,"Figure 3A2")}
+        
+        description = "V: blue light during recording (cell A)"
+        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(dy+=10),scalebarx,scalebary,COLOR_BLUE,graph_traces)
+        
+        
+        description = "i: LGN0 synaptic input during blue light(cell A)"
+        _plot_(_globals_,description,lgn_isyn_recordings[LGN_NODE0].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_BLUE,graph_traces)
+
+        experiment_replay(RED) //record the activity with LGN input
+        
+        description = "V: replay green during red light (cell B; incongruent)"
+        _plot_(_globals_,description,vsoma_recordings[CELL_B].c.add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
+        
+        description = "V: replay green during red light (cell A; incongruent)"
+        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(dy+=20),scalebarx,scalebary,COLOR_RED,graph_traces)
+        
+        description = "voltage clamp.i: replay green during red light (cell A; incongruent)"
+        _plot_(_globals_,description,vclamp_recordings[CELL_A].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
+        
+        description = "voltage clamp.i: replay green during red light (cell B; incongruent)"
+        _plot_(_globals_,description,vclamp_recordings[CELL_B].c.mul(100).add(dy+=220),scalebarx,scalebary,COLOR_RED,graph_traces)
+
+        experiment_record(RED) //record the activity with LGN input
+        _plot_(_globals_,"i: recorded LGN1 to cell B",lgn_isyn_recordings[LGN_NODE1].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
+        // print_session(1)
+
+    //Figure 3BC
+        dy = 0
+        experiment_record(GREEN) //record the activity with LGN input
+        description = "V: green light during recording (cell A)"
+        
+        graph_traces=_plot_(_globals_,description,vsoma_recordings[CELL_A],scalebarx,scalebary,COLOR_GREEN)
+        {graph_traces.vfixed(1) graph_traces.label(0.1,0.9,"Figure 3BC")}
+        
+        experiment_replay(GREEN)
+        
+        description = "voltage clamp.i: replay green during green light (cell A; congruent input)"
+        _plot_(_globals_,description,vclamp_recordings[CELL_A].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
+        
+        description = "V: replay green during green light (cell A; congruent input)"        
+        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(dy+=120),scalebarx,scalebary,COLOR_BLACK,graph_traces)
+        }
+
+/*
+*******************************************************
+* finally, get things going
+*******************************************************
+*/
+    init_recordings()    
+    run_experiment()
+        
+	

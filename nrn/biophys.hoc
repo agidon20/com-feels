@@ -1,0 +1,16 @@
+/********************************************************
+    Set the biophysical properties of our neuron models
+    including the spikes and passive membrane potential
+    the input resistance 
+********************************************************/  
+
+    proc biophys(){
+        celsius = 37
+        cm = 1
+        L = 20
+        diam = 20
+        Rm = 0.629 //such that the input resistance = 50 MΩ
+        insert traub
+        gLbar_traub =  1/Rm/1000  	
+        v_shft_traub = 50
+    }
