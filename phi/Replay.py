@@ -2,25 +2,32 @@ import numpy as np
 import pandas as pd
 import pyphi
 
+# Calculating Φ values for replay experiment in Gidon et al., 2025.
+# This file was written by Albert Gidon 
+#   17/01/2025
+
 # Scientific Context
 # 1.	System Overview:
-#       o	The models consists 5 cortical neurons (A,B,C,D,E) with a feedforward LGN input.
-#       o	The LGN is activated by visual input (green light) and acts as a background constraint for 
-#                   Nodes A and B, ensuring their activation during stimulation.
-#       o Initial state is identical to the LGN inputs which activate by the light  presented to the
-#                    artificial subject.
+# o	    The model consists of 5 cortical neurons (A,B,C,D,E) with a feedforward LGN input (LGN A, LGN B).
+#       o	The LGN is activated by visual input (green light) and considered as a part of the system
+#               but never as a part of the major complex after the calculation of Phi.
+#       o   Initial state is identical to the LGN inputs, activated by the light  presented to the
+#                    artificial subject. Also, after the network evolved one step, the LGN 
+#                   caused neurons A or B to fire.
 # 2.	Key Features:
 #       o	Connectivity Matrix (cm) defines directed connections among neurons based on cortical interconnections.
 #                   connectivity is like a ring, [a --> c,d,e],[b --> d,e,a],[c --> e,a,b], [d --> a,b,c], [e --> b,c,d]
+#                   additionally, feedforward connection from the LGN [LNGA --> a] and [LGNB --> b]
 #       o	Transition Probability Matrix (TPM) encodes how neurons transition between states based on 
-#                   the current state and LGN input (set as background constaints to simplify the analisys)
+#                   the neurons and LGN input
 # 3.	Dynamic Rules (producing the TPM):
-#       o	Nodes activate if the sum of their neighbors' states (plus LGN input, if applicable) 
+#       o	Nodes activate if the sum of their neighbors' states plus LGN input
 #                   meets or exceeds a defined threshold (THRESHOLD).
-#       o	Receving LGN inputs endure consistent activation accross all states.
 # 4.	Analysis Goals:
 #       o	Compute Big Phi (Φ) for the major complex to measure the system's integration under LGN input - i.e.
-#           presenting the artificial subject green light.
+#           presenting the artificial subject blue light.
+#           Note that we do here blue light because it maintains Φ > 0 ,and the simplified mode
+#           is still close to the simulation in the paper.
 
 pyphi.config.PROGRESS_BARS = True
 pyphi.config.VALIDATE_SUBSYSTEM_STATES = True
@@ -32,54 +39,40 @@ def bits2int(s):
     return np.sum([int(bit) << i for i, bit in enumerate(s)])  # Combine bits into an integer
 
 def artificial_subject_phi(light, threshold, replay,  **kwargs):
-    # Matrix here  matches the NEURON simulation
-    # CM[i][j] = 1 means that node i influences node j.
-    # CM[i][j] = 0 means that node i does not influence node j.
-    cm =  np.array([
-        [0, 0, 1, 1, 1], 
-        [1, 0, 0, 1, 1], 
-        [1, 1, 0, 0, 1], 
-        [1, 1, 1, 0, 0], 
-        [0, 1, 1, 1, 0]  
-    ])
-    N = 5 
-    N2 = 2**N 
 
-    THRESHOLD = threshold  #two LGN nodes are on cause any cell to fire.
-    BLUE_LIGHT = np.array((1,0,0,0,0))
-    RED_LIGHT = np.array((0,1,0,0,0))
-    NO_LIGHT = np.array((0,0,0,0,0))
+    N = 7
+    N2 = 2**N 
+    cm = np.array([
+        # A    B    C    D    E    LGNA LGNB
+        [0,   0,   1,   1,   1,   0,   0],  # Row 0: A -> C, D, E
+        [1,   0,   0,   1,   1,   0,   0],  # Row 1: B -> A, D, E
+        [1,   1,   0,   0,   1,   0,   0],  # Row 2: C -> A, B, E
+        [1,   1,   1,   0,   0,   0,   0],  # Row 3: D -> A, B, C
+        [0,   1,   1,   1,   0,   0,   0],  # Row 4: E -> B, C, D
+        [1,   0,   0,   0,   0,   0,   0],  # Row 5: LGNA -> A
+        [0,   1,   0,   0,   0,   0,   0],  # Row 6: LGNB -> B
+    ])
+
+    cm = cm[0:N,0:N]
+    THRESHOLD = threshold  #the number of nodes that can cause a target node to fire
+    WEIGHT = np.array((1,1,1,1,1,THRESHOLD,THRESHOLD))[0:N] # LGN nodes connected to nodes A and B always make them cross the threshold.
+    
+    #input to the LGN
+    BLUE_LIGHT = np.array((0,0,0,0,0,1,0))[0:N]
+    RED_LIGHT = np.array((0,0,0,0,0,0,1))[0:N]
+    NO_LIGHT = np.array((0,0,0,0,0,0,0))[0:N]
     GREEN_LIGHT = BLUE_LIGHT + RED_LIGHT
 
     LGN_ON = BLUE_LIGHT if light == "blue"\
         else RED_LIGHT if light == "red"\
         else GREEN_LIGHT if light == "green"\
         else NO_LIGHT
-    INITIAL_STATE = LGN_ON if 'initial_state' not in kwargs else kwargs['initial_state'] # initial state should be like the LGN connectivity - makes sense
+    LGN_ON = LGN_ON[0:N]
+    CURRENT_STATE = kwargs.get('current_state', LGN_ON)[0:N] #set the current state according to the evolution of the network activity
+    REPLAY_STATE = kwargs.get('replay_state', np.array([0,0,0,0,0,0,0]))[0:N]  # give therecorded states for the voltage clamp manually
 
-   # Replay as Background Constraints:
-    # This function simulates the next state of the system under various replay conditions,
-    # including no replay (natural dynamics), feedforward replay, and feedback replay.
-    # - The replay corresponds to background constraints, particularly when all cortical
-    #   neurons are active, representing the congruent green light output in the simulation.
-    # - Note: When replay is active (feedforward or feedback), the replay type does not
-    #   influence the outcome, as the resulting TPM is identical for both replays.
 
-    def get_next_state(a, b, c, d, e, replay_type):
-        """
-        Compute the next state of the system based on the current state and replay type.
-        
-        Parameters:
-        a, b, c, d, e: Current states of the neurons (binary: 0 or 1).
-        replay_type: Type of replay mechanism ("no replay", "ff replay", "fb replay").
-        
-        Returns:
-        The next state encoded as an integer.
-        """
-        # Combine inputs into a state vector
-        S = np.array((a, b, c, d, e))
-        
-        # Determine the next state based on the replay type
+    def get_next_state(S, replay_type):
         if replay_type == "no replay":  # No replay, natural dynamics
             Sn = get_next_state_noreplay(S)
         elif replay_type == "ff replay":  # Feedforward replay, don't care about S
@@ -88,57 +81,26 @@ def artificial_subject_phi(light, threshold, replay,  **kwargs):
             Sn = get_next_state_fb(S)
         else:
             raise ValueError("Invalid replay_type. Must be 'no replay', 'ff replay', or 'fb replay'.")
-        
-        # Convert the binary state vector to an integer representation
         return Sn
 
-        # Note: The connectivity matrix (cm) is transposed because we are interested in 
-        # the connections TO a mechanism rather than FROM it (as specified in the cm).
 
+    # Note: The connectivity matrix (cm) is transposed because we are interested in 
+    # the connections TO a mechanism rather than FROM it (as specified in the cm).
     def get_next_state_noreplay(S):
-        """
-        Compute the next state of the system without replay, relying on natural dynamics.
-        
-        Parameters:
-        S: Current state of the system (vector of binary values).
-        
-        Returns:
-        Sn: Next state of the system (vector of binary values).
-        """
-        # Calculate the weighted input to each neuron using the transposed connectivity matrix
-        Sn = np.matmul(cm.T, S) + LGN_ON * THRESHOLD  # Ensure threshold is crossed when LGN is active
-        
-        # Apply the thresholding function to determine the next state (binary activation)
+        # Ensure the threshold is crossed when LGN is active by making the synaptic weight to the value of the threshold
+        Sn = np.matmul(cm.T, S*WEIGHT)   
+        # print("Current",S*WEIGHT)
         Sn = (Sn >= THRESHOLD).astype(int)
+        # print("Next",Sn)
         return Sn
-
-    # Note: The recorded state is calculated here instead of being explicitly recorded,
-    # which simplifies the implementation for feedforward replay.
-
-    def recorded_state():
-        """
-        Compute the recorded state based on LGN inputs and threshold conditions.
-        
-        Returns:
-        A binary vector representing the recorded state.
-        """
-        # If the sum of LGN_ON inputs crosses the threshold, all are active
-        # Otherwise, the recorded state matches the LGN inputs
-        return np.ones(LGN_ON.shape) if LGN_ON.sum() >= THRESHOLD else LGN_ON
 
     # Feedforward Replay:
     # In this mode, the input is ignored, and the nodes are set directly based on the recorded state.
 
     def get_next_state_ff():
-        """
-        Compute the next state of the system under feedforward replay.
-        
-        Returns:
-        The recorded state (binary vector) as the next state.
-        """
-        return recorded_state()
-
-
+        # LGN is not determined by the voltage clamp, we set it always to zero here
+        return np.append(REPLAY_STATE,(0,0))[0:N] #me to myself: weird code
+    
 
     # Feedback Replay: This function simulates the operation of a feedback replay mechanism,
     # mimicking the behavior of a voltage clamp. The voltage clamp forces the system's state
@@ -156,7 +118,8 @@ def artificial_subject_phi(light, threshold, replay,  **kwargs):
         Sn = get_next_state_noreplay(S)  # Function to compute the next state without any feedback
         
         # Retrieve the pre-recorded state values for the current system context
-        command_voltage = recorded_state()  # Pre-determined states (assumes this function is defined elsewhere)
+        # Note that LGN nodes are free to do whatever they want.
+        command_voltage = np.append(REPLAY_STATE,Sn[N-2:N])[0:N]  # Pre-determined states (assumes this function is defined elsewhere)
         
         # Compute the delta between the natural state and the recorded state
         # Delta represents the adjustment made by the voltage clamp to enforce the recorded state
@@ -168,19 +131,18 @@ def artificial_subject_phi(light, threshold, replay,  **kwargs):
         
         # Note:
         # - The voltage clamp forces the state of the system to match the recorded values,
-        #   effectively "replaying" a previously observed state.
+        #   effectively "replaying" a recorded  state.
+        #   The next state for clamped neurons is the recorded pattern, no matter what.        
         # - This example demonstrates where IIT does not distinguish between feedforward replay
         #   (e.g., imposed inputs) and feedback replay (e.g., voltage clamp) for determining
         #   system dynamics or integrated information.
+
         # - IIT focuses on the causal structure, not the mechanism enforcing the replay.
         return voltage_clamp
 
-
     # Initialize a Transition Probability Matrix (TPM) for the system.
-    # The TPM captures the transition probabilities between all possible states of the system.
     tpm = np.array([[0] * N2 for _ in range(N2)])  # Create an NxN zero matrix, where N2 = 2^N (number of possible states)
 
-    # Populate the TPM based on the system's dynamics.
     for current_state in range(N2):
         """
         For each possible state of the system:
@@ -189,20 +151,17 @@ def artificial_subject_phi(light, threshold, replay,  **kwargs):
         - Update the TPM to indicate a deterministic transition from the current state to the next state.
         """
         binary_state = int2bits(current_state, N)
-        next_state = get_next_state(*binary_state, replay)  # Get the next state based on replay type
+        next_state = get_next_state(binary_state, replay)  # Get the next state based on replay type
         next_state = bits2int(next_state)
         tpm[current_state][next_state] += 1.0 # Set the transition probability to 1 for the deterministic case
 
-    # Create a PyPhi network using the computed TPM and connectivity matrix (cm).
-    network = pyphi.Network(tpm, cm=cm, node_labels=['A', 'B', 'C', 'D', 'E'])
-
-    # Compute the major complex of the network for a given initial state.
+    network = pyphi.Network(tpm, cm=cm, node_labels=['A', 'B', 'C', 'D', 'E', 'LGNA', 'LGNB'][0:N])
+    # Compute the major complex of the network for a given current state.
     # The major complex represents the subset of the system with maximum integrated information (Φ).
-    major_complex = pyphi.compute.major_complex(network, INITIAL_STATE)
-
+    major_complex = pyphi.compute.major_complex(network, CURRENT_STATE)
     print( f"big Φ for {major_complex.subsystem} {replay} and with {light} light stimulus is {major_complex.phi} (thereshold={THRESHOLD})" )
     
-    state_labels = ['"' + format(i, "06b")[::-1] +'"' for i in range(N2)]
+    state_labels = ['"' + format(i, f"0{N+1}b")[::-1] +'"' for i in range(N2)]
     csvfilename = "tpm (" + light + "_" 
     csvfilename += "replay" if replay else "noreplay"
    
@@ -214,102 +173,59 @@ def artificial_subject_phi(light, threshold, replay,  **kwargs):
 
 ####See results below
 
-
-print("All the values below are generated for congruent replay")
-theta = 3
-print("Threshold set to", theta)
-artificial_subject_phi(light = "no",     threshold=theta, replay = "no replay")
-artificial_subject_phi(light = "red",    threshold=theta, replay = "no replay")
-artificial_subject_phi(light = "blue",   threshold=theta, replay = "no replay")
-artificial_subject_phi(light = "green",  threshold=theta, replay = "no replay")
-
-#feedforward replay
-artificial_subject_phi(light = "no",     threshold=theta, replay = "ff replay")
-artificial_subject_phi(light = "red",    threshold=theta, replay = "ff replay")
-artificial_subject_phi(light = "blue",   threshold=theta, replay = "ff replay")
-artificial_subject_phi(light = "green",  threshold=theta, replay = "ff replay")
-
-#feedback replay
-artificial_subject_phi(light = "no",     threshold=theta, replay = "fb replay")
-artificial_subject_phi(light = "red",    threshold=theta, replay = "fb replay")
-artificial_subject_phi(light = "blue",   threshold=theta, replay = "fb replay")
-artificial_subject_phi(light = "green",  threshold=theta, replay = "fb replay")
-
-
 theta = 2
-print("Threshold set to", theta)
-artificial_subject_phi(light = "no",     threshold=theta, replay = "no replay")
-artificial_subject_phi(light = "red",    threshold=theta, replay = "no replay")
-artificial_subject_phi(light = "blue",   threshold=theta, replay = "no replay")
-artificial_subject_phi(light = "green",  threshold=theta, replay = "no replay")
+# print("Threshold set to", theta)
+# No inputs
+artificial_subject_phi(light = "no",
+                       threshold=theta, 
+                       replay = "no replay",
+                       current_state = np.array((0,0,0,0,0,0,0)))
+# input to the LGN - this is the first step in the simulation where LGN A was activated but cell A is not yet active 
+artificial_subject_phi(light = "blue",    
+                       threshold=theta, 
+                       replay = "no replay",
+                       current_state = np.array((0,0,0,0,0,1,0)))
+# input to the LGN is still on, and the simulation evolved one step whereby cell A is active
+artificial_subject_phi(light = "blue",    
+                       threshold=theta, 
+                       replay = "no replay",
+                       current_state = np.array((1,0,0,0,0,1,0)))
+print ("feedforward replay")
+artificial_subject_phi(light = "blue",
+                       threshold=theta,
+                       replay = "ff replay",
+                       current_state = np.array((1,0,0,0,0,1,0)),
+                       replay_state = np.array((1,0,0,0,0)))
 
+print ("congruent feedback replay - blue replayed during blue input")
+artificial_subject_phi(light = "blue",
+                       threshold=theta, 
+                       replay = "fb replay",
+                       current_state = np.array((1,0,0,0,0,1,0)),
+                       replay_state = np.array((1,0,0,0,0)))
 
-#feedforward replay
-artificial_subject_phi(light = "no",     threshold=theta, replay = "ff replay")
-artificial_subject_phi(light = "red",    threshold=theta, replay = "ff replay")
-artificial_subject_phi(light = "blue",   threshold=theta, replay = "ff replay")
-artificial_subject_phi(light = "green",  threshold=theta, replay = "ff replay")
-
-#feedback replay
-artificial_subject_phi(light = "no",     threshold=theta, replay = "fb replay")
-artificial_subject_phi(light = "red",    threshold=theta, replay = "fb replay")
-artificial_subject_phi(light = "blue",   threshold=theta, replay = "fb replay")
-artificial_subject_phi(light = "green",  threshold=theta, replay = "fb replay")
-
+print ("incongruent feedback replay  - blue replayed during red input")
+artificial_subject_phi(light = "blue",    
+                       threshold=theta, 
+                       replay = "fb replay",
+                       current_state = np.array((0,1,0,0,0,0,0)),
+                       replay_state = np.array((1,0,0,0,0)))
 
 
 #RESULTS for congruent replay:
 #################
-#   blue=cortical cell A fires
-#   red= cortical cell B fires
-#       for threshold = 2
-#   green= cortical cells A,B,C,D,E fire which creates all or non 
-#       network as a whole for green and therefore Φ = 0
-#       for threshold = 3
-#   no(light)=no cell recieves input
-#   threshold=minimals number of inputs required to activate to activate a mechanism.
+#   blue=cortical cell A fires above the threshold
+#   threshold = 2: number of inputs required to activate a mechanism.
 
-# without replay
-#------------------
-# big Φ for Subsystem(A, B, C, D, E) no replay and with no light stimulus is 0.056123 (thereshold=3)
-# big Φ for Subsystem(A, C, D, E) no replay and with red light stimulus is 0.051021 (thereshold=3)
-# big Φ for Subsystem(B, C, D, E) no replay and with blue light stimulus is 0.051021 (thereshold=3)
-# big Φ for Subsystem(C, D, E) no replay and with green light stimulus is 0.215278 (thereshold=3)
-
-
-# with feedforward replay
-#------------------
-# big Φ for Subsystem() ff replay and with no light stimulus is 0.0 (thereshold=3)
-# big Φ for Subsystem() ff replay and with red light stimulus is 0.0 (thereshold=3)
-# big Φ for Subsystem() ff replay and with blue light stimulus is 0.0 (thereshold=3)
-# big Φ for Subsystem() ff replay and with green light stimulus is 0.0 (thereshold=3)
-
-# with feedback replay
-#------------------
-# big Φ for Subsystem() fb replay and with no light stimulus is 0.0 (thereshold=3)
-# big Φ for Subsystem() fb replay and with red light stimulus is 0.0 (thereshold=3)
-# big Φ for Subsystem() fb replay and with blue light stimulus is 0.0 (thereshold=3)
-# big Φ for Subsystem() fb replay and with green light stimulus is 0.0 (thereshold=3)
-
-
-
-# without replay
-#------------------
+# no replay
 # big Φ for Subsystem(A, B, C, D, E) no replay and with no light stimulus is 10.729488 (thereshold=2)
-# big Φ for Subsystem(A, D) no replay and with red light stimulus is 1.0 (thereshold=2)
-# big Φ for Subsystem(C, E) no replay and with blue light stimulus is 1.0 (thereshold=2)
-# big Φ for Subsystem() no replay and with green light stimulus is 0.0 (thereshold=2)
+# big Φ for Subsystem(A, C, D, E) no replay and with blue light stimulus is 0.366389 (thereshold=2, current state =0,0,0,0,0,0,1)
+# big Φ for Subsystem(A, D) no replay and with blue light stimulus is 1.0 (thereshold=2, current state = 0,1,0,0,0,0,1)
 
-# with feedforward replay
-#------------------
-# big Φ for Subsystem() ff replay and with no light stimulus is 0.0 (thereshold=2)
-# big Φ for Subsystem() ff replay and with red light stimulus is 0.0 (thereshold=2)
-# big Φ for Subsystem() ff replay and with blue light stimulus is 0.0 (thereshold=2)
-# big Φ for Subsystem() ff replay and with green light stimulus is 0.0 (thereshold=2)
+# feedforward replay
+# big Φ for Subsystem() ff replay and with the blue light stimulus is 0.0 (thereshold=2)
 
-# with feedback replay
-#------------------
-# big Φ for Subsystem() fb replay and with no light stimulus is 0.0 (thereshold=2)
-# big Φ for Subsystem() fb replay and with red light stimulus is 0.0 (thereshold=2)
+# congruent feedback replay - blue replayed during blue input
 # big Φ for Subsystem() fb replay and with blue light stimulus is 0.0 (thereshold=2)
-# big Φ for Subsystem() fb replay and with green light stimulus is 0.0 (thereshold=2)
+# incongruent feedback replay  - blue replayed during red input
+# big Φ for Subsystem() fb replay and with blue light stimulus is 0.0 (thereshold=2)
