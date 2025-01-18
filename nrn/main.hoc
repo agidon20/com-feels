@@ -361,37 +361,20 @@ simulation parameters
 
     //Figure 3A2
    
-        experiment_record(BLUE) //record the activity with LGN input
+        experiment_record(GREEN) //record the activity with LGN input
         dy = 0
-        description = "V: blue light during recording (cell B)"
-        graph_traces = _plot_(_globals_,description,vsoma_recordings[CELL_B],scalebarx,scalebary,COLOR_BLUE)
-        
+        description = "i: LGN0 synaptic input during green light(cell A)"
+        graph_traces = _plot_(_globals_,description,lgn_isyn_recordings[LGN_NODE0].c.mul(100),scalebarx,scalebary,COLOR_BLUE)        
         {graph_traces.vfixed(1) graph_traces.label(0.1,0.9,"Figure 3A2")}
         
-        description = "V: blue light during recording (cell A)"
-        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(dy+=10),scalebarx,scalebary,COLOR_BLUE,graph_traces)
+        experiment_replay(RED) //replay the activity for incongruent red input
         
-        
-        description = "i: LGN0 synaptic input during blue light(cell A)"
-        _plot_(_globals_,description,lgn_isyn_recordings[LGN_NODE0].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_BLUE,graph_traces)
-
-        experiment_replay(RED) //record the activity with LGN input
-        
-        description = "V: replay green during red light (cell B; incongruent)"
-        _plot_(_globals_,description,vsoma_recordings[CELL_B].c.add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
-        
-        description = "V: replay green during red light (cell A; incongruent)"
-        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(dy+=20),scalebarx,scalebary,COLOR_RED,graph_traces)
-        
+   
         description = "voltage clamp.i: replay green during red light (cell A; incongruent)"
         _plot_(_globals_,description,vclamp_recordings[CELL_A].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
         
-        description = "voltage clamp.i: replay green during red light (cell B; incongruent)"
-        _plot_(_globals_,description,vclamp_recordings[CELL_B].c.mul(100).add(dy+=220),scalebarx,scalebary,COLOR_RED,graph_traces)
-
-        experiment_record(RED) //record the activity with LGN input
-        _plot_(_globals_,"i: recorded LGN1 to cell B",lgn_isyn_recordings[LGN_NODE1].c.mul(100).add(dy+=120),scalebarx,scalebary,COLOR_RED,graph_traces)
-        // print_session(1)
+         description = "V: replay green during red light (cell A; incongruent)"
+        _plot_(_globals_,description,vsoma_recordings[CELL_A].c.add(dy+=150),scalebarx,scalebary,COLOR_RED,graph_traces)
 
     //Figure 3BC
         dy = 0
